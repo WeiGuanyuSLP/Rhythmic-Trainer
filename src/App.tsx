@@ -50,6 +50,8 @@ interface SessionStats {
   totalError: number;
   earlyCount: number;
   lateCount: number;
+  maxBurst: number;
+  currentBurst: number;
 }
 
 interface Feedback {
@@ -120,6 +122,8 @@ export default function App() {
       totalError: 0,
       earlyCount: 0,
       lateCount: 0,
+      maxBurst: 0,
+      currentBurst: 0,
     });
     setFeedback(null);
   };
@@ -157,14 +161,31 @@ export default function App() {
         audioService.playD();
       }
 
-      setStats(prev => ({
-        ...prev,
-        taps: prev.taps + 1,
-        [type]: prev[type] + 1,
-        totalError: prev.totalError + absDiff,
-        earlyCount: type !== 'perfect' && diff < 0 ? prev.earlyCount + 1 : prev.earlyCount,
-        lateCount: type !== 'perfect' && diff >= 0 ? prev.lateCount + 1 : prev.lateCount,
-      }));
+      const isPractice = nearestIdx < 3;
+
+      setStats(prev => {
+        const newCurrentBurst = type === 'perfect' ? prev.currentBurst + 1 : 0;
+        const newMaxBurst = Math.max(prev.maxBurst, newCurrentBurst);
+
+        if (isPractice) {
+          return {
+            ...prev,
+            currentBurst: newCurrentBurst,
+            maxBurst: newMaxBurst,
+          };
+        }
+
+        return {
+          ...prev,
+          taps: prev.taps + 1,
+          [type]: prev[type] + 1,
+          totalError: prev.totalError + absDiff,
+          earlyCount: type !== 'perfect' && diff < 0 ? prev.earlyCount + 1 : prev.earlyCount,
+          lateCount: type !== 'perfect' && diff >= 0 ? prev.lateCount + 1 : prev.lateCount,
+          currentBurst: newCurrentBurst,
+          maxBurst: newMaxBurst,
+        };
+      });
 
       setFeedback({
         type,
@@ -192,15 +213,28 @@ export default function App() {
     if (currentCheckpointIdx > lastProcessedCheckpointRef.current) {
       audioService.playB();
       lastProcessedCheckpointRef.current = currentCheckpointIdx;
-      setStats(prev => ({ ...prev, checkpoints: prev.checkpoints + 1 }));
-
-      // Check for missed previous checkpoint
-      if (currentCheckpointIdx > 0) {
-        const prevIdx = currentCheckpointIdx - 1;
-        if (!tapsInCurrentCheckpointRef.current.has(prevIdx)) {
-          setStats(prev => ({ ...prev, missed: prev.missed + 1 }));
+      
+      const isPractice = currentCheckpointIdx < 3;
+      
+      setStats(prev => {
+        const newStats = { ...prev };
+        if (!isPractice) {
+          newStats.checkpoints = prev.checkpoints + 1;
         }
-      }
+
+        // Check for missed previous checkpoint
+        if (currentCheckpointIdx > 0) {
+          const prevIdx = currentCheckpointIdx - 1;
+          if (!tapsInCurrentCheckpointRef.current.has(prevIdx)) {
+            if (!isPractice) {
+              newStats.missed = prev.missed + 1;
+            }
+            // A miss resets the burst
+            newStats.currentBurst = 0;
+          }
+        }
+        return newStats;
+      });
     }
 
     // Clear feedback after 300ms
@@ -391,9 +425,17 @@ export default function App() {
                   <Play className="w-8 h-8 fill-[#141414]" />
                 </div>
                 <p className="text-sm font-medium opacity-40 uppercase tracking-widest">Ready to start?</p>
+                <p className="text-[10px] font-bold opacity-30 uppercase tracking-[0.3em]">First 3 trials are practice</p>
               </motion.div>
             ) : gameState === 'running' ? (
-              <div className="w-full h-full flex items-center justify-center">
+              <div className="w-full h-full flex items-center justify-center relative">
+                {/* Practice Indicator */}
+                {lastProcessedCheckpointRef.current < 3 && (
+                  <div className="absolute top-6 left-1/2 -translate-x-1/2 px-4 py-1 bg-orange-500 text-white text-[10px] font-bold uppercase tracking-[0.2em] rounded-full shadow-lg z-20">
+                    Practice Mode
+                  </div>
+                )}
+                
                 {visualMode === 'pills' && (
                   <div className="flex items-center gap-1.5 sm:gap-3 h-32">
                     {/* Red Left */}
@@ -573,7 +615,7 @@ export default function App() {
                   <h2 className="text-2xl font-bold uppercase tracking-tight">Session Complete</h2>
                   <p className="text-sm opacity-40">Great work on your timing practice.</p>
                 </div>
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-3 gap-4">
                   <div className="p-4 bg-[#141414]/5 rounded-2xl text-left">
                     <span className="text-[10px] font-bold uppercase tracking-widest opacity-40">Accuracy</span>
                     <div className="text-xl font-mono font-bold">
@@ -584,6 +626,12 @@ export default function App() {
                     <span className="text-[10px] font-bold uppercase tracking-widest opacity-40">Avg Error</span>
                     <div className="text-xl font-mono font-bold">
                       {stats.taps > 0 ? Math.round(stats.totalError / stats.taps) : 0}ms
+                    </div>
+                  </div>
+                  <div className="p-4 bg-green-500/10 rounded-2xl text-left border border-green-500/20">
+                    <span className="text-[10px] font-bold uppercase tracking-widest text-green-700">Max Burst</span>
+                    <div className="text-xl font-mono font-bold text-green-700">
+                      {stats.maxBurst}
                     </div>
                   </div>
                 </div>
@@ -651,7 +699,7 @@ export default function App() {
           </DialogHeader>
           
           <div className="space-y-8 py-6">
-            <div className="grid grid-cols-2 gap-6">
+            <div className="grid grid-cols-3 gap-6">
               <div className="space-y-1">
                 <Label className="text-[10px] font-bold uppercase tracking-widest opacity-40">Total Checkpoints</Label>
                 <div className="text-3xl font-mono font-bold">{stats.checkpoints}</div>
@@ -659,6 +707,10 @@ export default function App() {
               <div className="space-y-1">
                 <Label className="text-[10px] font-bold uppercase tracking-widest opacity-40">Average Error</Label>
                 <div className="text-3xl font-mono font-bold">{stats.taps > 0 ? Math.round(stats.totalError / stats.taps) : 0}ms</div>
+              </div>
+              <div className="space-y-1">
+                <Label className="text-[10px] font-bold uppercase tracking-widest text-green-600">Max Burst</Label>
+                <div className="text-3xl font-mono font-bold text-green-600">{stats.maxBurst}</div>
               </div>
             </div>
 
